@@ -8,8 +8,10 @@
 param(
     [Parameter(Mandatory)] [string] $Server,
     [int] $Keep = 10,
-    [string] $Dir = $PSScriptRoot
+    [string] $Dir
 )
+# Not as a param default: Windows PowerShell 5.1 leaves $PSScriptRoot empty there
+if (-not $Dir) { $Dir = $PSScriptRoot }
 
 $Name = "mc-" + (Get-Date -Format "yyyy-MM-dd_HHmm") + ".tar.zst"
 $Out  = Join-Path $Dir $Name
