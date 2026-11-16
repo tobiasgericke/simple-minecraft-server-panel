@@ -1,0 +1,19 @@
+# Rendered by install.sh: every placeholder is replaced with its value from config.env
+[Unit]
+Description=mc-panel (Minecraft admin panel, behind a reverse proxy)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=@PANEL_USER@
+Group=@PANEL_USER@
+SupplementaryGroups=@MC_USER@
+EnvironmentFile=/etc/mc-panel/config.env
+WorkingDirectory=@PANEL_DIR@
+ExecStart=@PANEL_DIR@/venv/bin/uvicorn app:app --host @PANEL_HOST@ --port @PANEL_PORT@ --no-access-log
+# Listening on a bridge IP (e.g. docker0) can fail until Docker is up -> just retry
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

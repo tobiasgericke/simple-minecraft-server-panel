@@ -1,0 +1,4 @@
+# Rendered by install.sh to /etc/needrestart/conf.d/mc-panel.conf (Debian/Ubuntu only).
+# needrestart restarts services after apt upgrades (including unattended-upgrades).
+# Not the Minecraft server: that would kick all players. Restart it yourself in the panel.
+$nrconf{override_rc}{qr(^@MC_SERVICE@\.service$)} = 0;

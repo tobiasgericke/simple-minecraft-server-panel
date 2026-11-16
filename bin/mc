@@ -1,0 +1,11 @@
+#!/bin/bash
+# mc <command>  -> send a command to the server console and show the response
+# mc            -> follow the live log (Ctrl+C to quit)
+set -euo pipefail
+source /etc/mc-panel/config.env
+LOG=$MC_DIR/logs/latest.log
+if [ $# -eq 0 ]; then exec tail -n 30 -f "$LOG"; fi
+n=$(wc -l < "$LOG")
+echo "$*" > "$MC_DIR/console.fifo"
+sleep 1
+tail -n +$((n+1)) "$LOG"

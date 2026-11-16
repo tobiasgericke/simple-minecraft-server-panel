@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MC Panel</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%235fb35f'/><rect x='3' y='4' width='3' height='3' fill='%23111'/><rect x='10' y='4' width='3' height='3' fill='%23111'/><rect x='6' y='8' width='4' height='4' fill='%23111'/></svg>">
+<style>
+  :root {
+    --bg: #111418; --panel: #1a1f25; --line: #2a313a; --text: #d8dde3; --muted: #8a95a3;
+    --ok: #5fb35f; --warn: #e0a33a; --bad: #e05a4f; --accent: #4f8fe0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif;
+         height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .pill { padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; background: var(--line); }
+  .pill.ok { background: #1f3a1f; color: var(--ok); } .pill.warn { background: #3a2f1a; color: var(--warn); }
+  .pill.bad { background: #3a1f1d; color: var(--bad); }
+  .spacer { flex: 1; }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+           padding: 6px 14px; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.go { border-color: #2f5a2f; } button.stop { border-color: #5a2f2c; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; padding: 12px 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+  .card .k { color: var(--muted); font-size: 12px; }
+  .card .v { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .card .s { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  #log { flex: 1; margin: 0 16px; background: #0b0d10; border: 1px solid var(--line); border-radius: 8px;
+         padding: 8px 10px; overflow-y: auto; font: 12px/1.45 ui-monospace, Consolas, monospace;
+         white-space: pre-wrap; overflow-wrap: anywhere; min-height: 200px; }
+  #log .w { color: var(--warn); } #log .e { color: var(--bad); } #log .c { color: var(--accent); }
+  #log .t { color: #56606c; }
+  form { display: flex; gap: 8px; padding: 10px 16px 14px; }
+  input { flex: 1; background: #0b0d10; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+          padding: 8px 10px; font: 13px ui-monospace, Consolas, monospace; min-width: 0; }
+  input:focus { outline: none; border-color: var(--accent); }
+  #toast { position: fixed; right: 16px; bottom: 70px; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 6px; padding: 8px 12px; display: none; max-width: calc(100% - 32px); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="name">Minecraft</h1>
+  <span id="state" class="pill">…</span>
+  <span class="spacer"></span>
+  <button class="go" id="b-start" onclick="power('start')">Start</button>
+  <button id="b-restart" onclick="power('restart')">Restart</button>
+  <button class="stop" id="b-stop" onclick="power('stop')">Stop</button>
+</header>
+
+<section class="cards">
+  <div class="card"><div class="k">Players</div><div class="v" id="players">–</div><div class="s" id="names"></div></div>
+  <div class="card" title="Java reserves the whole heap at start. 'in RAM' is what is actually in memory, 'swapped' was moved to disk because RAM is full — that causes lag spikes.">
+    <div class="k">Memory</div><div class="v" id="ram">–</div><div class="s" id="ram-s"></div></div>
+  <div class="card"><div class="k">CPU</div><div class="v" id="cpu">–</div><div class="s" id="uptime"></div></div>
+  <div class="card"><div class="k">Last backup</div><div class="v" id="backup">–</div><div class="s" id="backup-s"></div></div>
+  <div class="card"><div class="k">Backup</div>
+    <button id="b-dl" style="margin-top:6px" onclick="download()">Download now</button></div>
+</section>
+
+<div id="log"></div>
+<form id="console">
+  <input id="cmd" placeholder="Console command, e.g. list, say Hello, op Name   (↑/↓ = history)" autocomplete="off">
+  <button>Send</button>
+</form>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const GB = 1024 ** 3;
+
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t.timer); t.timer = setTimeout(() => t.style.display = 'none', 4000);
+}
+async function api(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(body || {}) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+function ago(s) {
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
+  if (s < 86400 * 2) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+function dur(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return 'up ' + (d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`);
+}
+const gb = b => (b / GB).toFixed(1) + ' GB';
+
+// --- status every 3 s ---
+async function refresh() {
+  let s;
+  try { s = await (await fetch('/api/status')).json(); } catch { return; }
+  $('name').textContent = document.title = s.name;
+  const labels = { active: s.ready ? ['Online', 'ok'] : ['Starting …', 'warn'], activating: ['Starting …', 'warn'],
+                   deactivating: ['Stopping …', 'warn'], inactive: ['Offline', 'bad'], failed: ['Crashed', 'bad'] };
+  const [txt, cls] = labels[s.state] || [s.state, ''];
+  $('state').textContent = txt; $('state').className = 'pill ' + cls;
+  const up = s.state === 'active', busy = ['activating', 'deactivating'].includes(s.state);
+  $('b-start').disabled = up || busy; $('b-stop').disabled = !up; $('b-restart').disabled = !up;
+  $('b-dl').disabled = busy;
+
+  $('players').textContent = s.players ? `${s.players.online} / ${s.players.max}` : '–';
+  $('names').textContent = s.players?.names.join(', ') || (s.players ? 'nobody online' : '');
+
+  const p = s.process || {};
+  if (p.rss) {
+    $('ram').textContent = gb(p.rss) + ' in RAM';
+    const sw = p.swap || 0, ratio = s.heap ? sw / s.heap : 0;
+    $('ram').className = 'v ' + (ratio > 0.25 ? 'bad' : ratio > 0.05 ? 'warn' : '');
+    $('ram-s').textContent = (sw > 0.05 * GB ? `${gb(sw)} swapped · ` : '') + (s.heap ? `heap ${gb(s.heap)}` : '');
+  } else { $('ram').textContent = '–'; $('ram').className = 'v'; $('ram-s').textContent = ''; }
+  $('cpu').textContent = p.cpu_pct != null ? p.cpu_pct + ' %' : '–';
+  $('uptime').textContent = p.uptime_s ? dur(p.uptime_s) : '';
+
+  const b = s.backup, bv = $('backup');
+  if (b) {
+    const h = b.age_s / 3600;
+    bv.textContent = ago(b.age_s);
+    bv.className = 'v ' + (h > s.backup_crit_h ? 'bad' : h > s.backup_warn_h ? 'warn' : 'ok');
+    $('backup-s').textContent = `${(b.size / GB).toFixed(2)} GB · via ${b.source} · `
+      + new Date(b.time).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+  } else { bv.textContent = 'none yet'; bv.className = 'v bad'; $('backup-s').textContent = ''; }
+}
+refresh(); setInterval(refresh, 3000);
+
+async function power(action) {
+  const ask = { stop: 'Really stop the server?', restart: 'Really restart the server?' }[action];
+  if (ask && !confirm(ask)) return;
+  ['b-start', 'b-stop', 'b-restart'].forEach(id => $(id).disabled = true);
+  toast({ start: 'Starting …', stop: 'Stopping (saving the world) …', restart: 'Restarting …' }[action]);
+  try { await api('/api/power/' + action); toast('Done.'); }
+  catch (e) { toast('Error: ' + e.message); }
+  refresh();
+}
+
+function download() {
+  if (!confirm('Create and download a backup now? (several GB; autosave is paused meanwhile)')) return;
+  location.href = '/api/backup/download';
+  toast('Creating backup, the download starts in a moment …');
+}
+
+// --- live log ---
+const log = $('log');
+function addLine(text) {
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const div = document.createElement('div');
+  const m = text.match(/^(\[[\d:]+\] )?(.*)$/);
+  if (m[1]) { const t = document.createElement('span'); t.className = 't'; t.textContent = m[1]; div.append(t); }
+  const rest = document.createElement('span'); rest.textContent = m[2];
+  if (/\/(ERROR|FATAL)\]|Exception/.test(text)) rest.className = 'e';
+  else if (/\/WARN\]/.test(text)) rest.className = 'w';
+  else if (/issued server command|CONSOLE/.test(text)) rest.className = 'c';
+  div.append(rest); log.append(div);
+  while (log.childElementCount > 2000) log.firstChild.remove();
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+const es = new EventSource('/api/logs');
+es.onmessage = e => addLine(e.data);
+es.addEventListener('reset', () => addLine('──────── new log (server restarted) ────────'));
+
+// --- console with history ---
+const hist = []; let hi = 0;
+$('console').onsubmit = async e => {
+  e.preventDefault();
+  const cmd = $('cmd').value.trim(); if (!cmd) return;
+  hist.push(cmd); hi = hist.length; $('cmd').value = '';
+  try { await api('/api/console', { cmd }); } catch (err) { toast('Error: ' + err.message); }
+};
+$('cmd').onkeydown = e => {
+  if (e.key === 'ArrowUp' && hi > 0) { $('cmd').value = hist[--hi]; e.preventDefault(); }
+  if (e.key === 'ArrowDown') { hi = Math.min(hist.length, hi + 1); $('cmd').value = hist[hi] || ''; e.preventDefault(); }
+};
+</script>
+</body>
+</html>

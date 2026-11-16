@@ -1,0 +1,76 @@
+#!/bin/bash
+# Streams a consistent backup (world, plugins, configs) as .tar.zst to stdout:
+#   ssh myserver sudo mc-backup > backup.tar.zst
+# Nothing is stored on the server. Status messages go to stderr.
+# On success: SHA256 in /run/mc-backup.sha256 (to verify the download),
+#             time/size/hash in $BACKUP_STATE_DIR/last.json (shown in the panel).
+# Optional argument: who fetches the backup (e.g. pc, panel), only shown in the panel.
+set -euo pipefail
+source /etc/mc-panel/config.env
+SOURCE="${1:-cli}"
+FIFO=$MC_DIR/console.fifo
+LOG=$MC_DIR/logs/latest.log
+STATE=$BACKUP_STATE_DIR
+
+running() { systemctl is-active -q "$MC_SERVICE" && [ -p "$FIFO" ]; }
+cmd() { running && echo "$*" > "$FIFO" || true; }
+trap 'cmd save-on' EXIT
+# Aborted (download cancelled, SSH gone): stop the pipeline, then the EXIT trap -> save-on
+trap 'pkill -P $$ 2>/dev/null; exit 1' HUP INT TERM PIPE
+
+if running; then
+  cmd "say Backup running, autosave paused for a moment..."
+  cmd save-off
+  n=$(wc -l < "$LOG")
+  cmd "save-all flush"
+  for _ in $(seq 1 120); do
+    tail -n +"$((n+1))" "$LOG" | grep -q "Saved the game" && break
+    sleep 1
+  done
+  echo "World saved, sending backup..." >&2
+fi
+
+mkdir -p "$STATE"
+rm -f /run/mc-backup.sha256 "$STATE/current.json"
+cd "$MC_DIR"
+# Only existing paths: world_nether etc. don't exist on newer versions
+shopt -s nullglob
+paths=()
+# shellcheck disable=SC2086  # BACKUP_PATHS is a space-separated list with globs
+for p in $BACKUP_PATHS; do [ -e "$p" ] && paths+=("$p"); done
+shopt -u nullglob
+
+# tar exit 1 = "file changed as we read it" (Paper writes small things despite save-off): warning only
+{ nice -n 19 ionice -c3 tar --warning=no-file-changed --exclude='*/session.lock' -cf - "${paths[@]}" \
+    || [ $? -eq 1 ]; } \
+  | nice -n 19 zstd -q -3 -T1 \
+  | python3 -c '
+# Passes the stream through, counting bytes + SHA256 on the way
+import hashlib, json, sys
+h, n = hashlib.sha256(), 0
+inp, out = sys.stdin.buffer, sys.stdout.buffer
+while chunk := inp.read(1 << 20):
+    h.update(chunk); n += len(chunk); out.write(chunk)
+out.flush()
+json.dump({"size": n, "sha256": h.hexdigest()}, open(sys.argv[1], "w"))
+' "$STATE/current.json" &
+# Background + wait: bash only runs traps once a foreground command has finished,
+# whereas wait is interrupted by signals right away (exit status incl. pipefail still arrives).
+wait $!
+
+# Only now has the stream fully gone out -> record it as the last backup
+python3 - "$STATE" "$SOURCE" <<'PY'
+import json, sys, datetime, pathlib
+state, source = pathlib.Path(sys.argv[1]), sys.argv[2]
+d = json.loads((state / "current.json").read_text())
+d["time"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+d["source"] = source
+(state / "last.json").write_text(json.dumps(d))
+pathlib.Path("/run/mc-backup.sha256").write_text(d["sha256"] + "\n")
+PY
+chmod 644 "$STATE/last.json"
+
+cmd save-on
+trap - EXIT
+cmd "say Backup done."
+echo "Done." >&2

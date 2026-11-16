@@ -1,0 +1,18 @@
+# Example: Caddy in front of mc-panel, with HTTPS and a password.
+#
+# Create the password hash:   caddy hash-password --plaintext 'your-password'
+# and put it into the environment of Caddy as MC_PANEL_HASH (or paste it below).
+#
+# Caddy on the host:          PANEL_HOST=127.0.0.1 in config.env, upstream 127.0.0.1:8095
+# Caddy in Docker:            PANEL_HOST=172.17.0.1 in config.env, upstream host.docker.internal:8095
+#                             and in compose.yml: extra_hosts: ["host.docker.internal:host-gateway"]
+
+panel.example.com {
+	basic_auth {
+		admin {$MC_PANEL_HASH}
+	}
+	# flush_interval -1: pass the live log (SSE) and backup downloads through immediately
+	reverse_proxy 127.0.0.1:8095 {
+		flush_interval -1
+	}
+}

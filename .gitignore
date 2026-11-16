@@ -1,0 +1,4 @@
+# your own settings stay local
+config.env
+__pycache__/
+.venv/

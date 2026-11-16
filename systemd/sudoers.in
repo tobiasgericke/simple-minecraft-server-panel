@@ -1,0 +1,3 @@
+# Rendered by install.sh to /etc/sudoers.d/mc-panel (checked with visudo).
+# The panel may run exactly this as root, nothing else.
+@PANEL_USER@ ALL=(root) NOPASSWD: /usr/bin/systemctl start @MC_SERVICE@, /usr/bin/systemctl stop @MC_SERVICE@, /usr/bin/systemctl restart @MC_SERVICE@, /usr/local/bin/mc-backup panel

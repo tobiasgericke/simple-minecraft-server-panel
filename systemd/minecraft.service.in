@@ -1,0 +1,18 @@
+# Rendered by install.sh: every placeholder is replaced with its value from config.env
+[Unit]
+Description=Minecraft server (mc-panel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=@MC_USER@
+WorkingDirectory=@MC_DIR@
+ExecStart=/usr/local/bin/mc-start
+# "stop" through the console saves the world; then wait until Java has exited
+ExecStop=/bin/bash -c 'echo stop > @MC_DIR@/console.fifo; while kill -0 $MAINPID 2>/dev/null; do sleep 1; done'
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

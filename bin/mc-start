@@ -1,0 +1,11 @@
+#!/bin/bash
+# Starts the Minecraft server (ExecStart of the systemd unit).
+# Console commands arrive through MC_DIR/console.fifo (see `mc` and the panel).
+set -euo pipefail
+source /etc/mc-panel/config.env
+cd "$MC_DIR"
+rm -f console.fifo && mkfifo -m 660 console.fifo   # 660: the panel (group MC_USER) may write
+# Open read+write so the server never sees EOF when a writer closes the FIFO
+exec 3<>console.fifo
+# shellcheck disable=SC2086  # JVM_FLAGS must be split into separate arguments
+exec "$JAVA" "-Xms$HEAP" "-Xmx$HEAP" $JVM_FLAGS -jar "$JAR" --nogui <&3
