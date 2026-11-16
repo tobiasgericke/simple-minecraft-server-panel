@@ -9,6 +9,7 @@ All settings come from environment variables, loaded by systemd from
 """
 import asyncio
 import datetime
+import gzip
 import json
 import os
 import re
@@ -18,7 +19,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -278,6 +279,30 @@ async def logs(request: Request):
                 f.close()
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+ARCHIVE_RE = re.compile(r"\d{4}-\d{2}-\d{2}-\d+\.log\.gz")   # Paper's rotated logs
+ARCHIVE_MAX_LINES = 50_000
+
+
+@app.get("/api/logs/archive")
+async def log_archive():
+    """Older, gzipped logs (newest first)."""
+    files = [p for p in LOG.parent.iterdir() if ARCHIVE_RE.fullmatch(p.name)]
+    files.sort(key=lambda p: (p.name[:10], int(p.name[11:].split(".")[0])), reverse=True)
+    return [{"name": p.name, "size": p.stat().st_size} for p in files]
+
+
+@app.get("/api/logs/archive/{name}")
+async def log_archive_file(name: str):
+    # Only names matching the pattern, so nobody can read ../../etc/shadow
+    if not ARCHIVE_RE.fullmatch(name) or not (LOG.parent / name).is_file():
+        raise HTTPException(404)
+    def read():
+        with gzip.open(LOG.parent / name, "rt", errors="replace") as f:
+            lines = f.read().splitlines()
+        return "\n".join(lines[-ARCHIVE_MAX_LINES:])
+    return PlainTextResponse(await asyncio.to_thread(read))
 
 
 @app.get("/api/backup/download")

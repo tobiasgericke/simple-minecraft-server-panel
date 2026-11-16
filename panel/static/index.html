@@ -39,8 +39,11 @@
   #log .chat { background: rgba(79,143,224,.08); border-left: 3px solid var(--accent);
                padding: 1px 6px; margin: 1px 0; border-radius: 0 4px 4px 0; }
   #log .chat .msg { color: #f0f3f6; }
-  #log .join { color: #7fcf7f; } #log .leave { color: #9aa4b1; }
-  #log .adv { color: #e8c45a; } #log .death { color: #e48a80; } #log .pcmd { color: var(--muted); }
+  #log .join { color: #7fcf7f; } #log .leave { color: #e06c6c; }
+  #log .adv { color: #e8c45a; } #log .death { color: #c792ea; } #log .pcmd { color: var(--muted); }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+           padding: 3px 6px; font: inherit; }
+  #archive-note { color: var(--warn); display: none; }
   #log.chat-only > div:not(.player) { display: none; }
   .logbar { display: flex; align-items: center; gap: 8px; padding: 0 16px 6px; color: var(--muted); font-size: 12px; }
   .logbar label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
@@ -64,7 +67,7 @@
 
 <section class="cards">
   <div class="card"><div class="k">Players</div><div class="v" id="players">–</div><div class="s" id="names"></div></div>
-  <div class="card" title="Java reserves the whole heap at start. 'in RAM' is what is actually in memory, 'swapped' was moved to disk because RAM is full — that causes lag spikes.">
+  <div class="card" title="Total memory of the Java process. The heap holds the world (chunks, entities, players); Java itself needs roughly 0.3–0.6 GB on top (compiled code, threads, garbage collector). 'swapped' was moved to disk because RAM is full, which causes lag spikes.">
     <div class="k">Memory</div><div class="v" id="ram">–</div><div class="s" id="ram-s"></div></div>
   <div class="card"><div class="k">CPU</div><div class="v" id="cpu">–</div><div class="s" id="uptime"></div></div>
   <div class="card"><div class="k">Last backup</div><div class="v" id="backup">–</div><div class="s" id="backup-s"></div></div>
@@ -73,7 +76,11 @@
 </section>
 
 <div class="logbar">
-  <span>Log</span><span class="spacer"></span>
+  <select id="logsel" title="Older logs are archived by the server on every restart and each day">
+    <option value="">Live log</option>
+  </select>
+  <span id="archive-note">archived log, not live</span>
+  <span class="spacer"></span>
   <label><input type="checkbox" id="chat-only"> Chat only</label>
 </div>
 <div id="log"></div>
@@ -129,7 +136,9 @@ async function refresh() {
     $('ram').textContent = gb(p.rss) + ' in RAM';
     const sw = p.swap || 0, ratio = s.heap ? sw / s.heap : 0;
     $('ram').className = 'v ' + (ratio > 0.25 ? 'bad' : ratio > 0.05 ? 'warn' : '');
-    $('ram-s').textContent = (sw > 0.05 * GB ? `${gb(sw)} swapped · ` : '') + (s.heap ? `heap ${gb(s.heap)}` : '');
+    const other = Math.max(0, p.rss + sw - s.heap);
+    $('ram-s').textContent = (sw > 0.05 * GB ? `${gb(sw)} swapped! · ` : '')
+      + (s.heap ? `heap ${gb(s.heap)} + Java ${gb(other)}` : '');
   } else { $('ram').textContent = '–'; $('ram').className = 'v'; $('ram-s').textContent = ''; }
   $('cpu').textContent = p.cpu_pct != null ? p.cpu_pct + ' %' : '–';
   $('uptime').textContent = p.uptime_s ? dur(p.uptime_s) : '';
@@ -210,8 +219,11 @@ function classify(text) {
   if ((r = msg.match(/^(\w{1,16}) left the game/))) return { time, kind: 'leave', name: r[1], body: msg };
   if ((r = msg.match(/^(\w{1,16}) has (made the advancement|completed the challenge|reached the goal)/)))
     return { time, kind: 'adv', name: r[1], body: msg };
-  if ((r = msg.match(/^(\w{1,16})\[\/[^\]]*\] logged in with/))) return { time, kind: 'other', name: r[1], thread, body: msg };
-  if ((r = msg.match(/^(\w{1,16})(?: \(\/[^)]*\))? lost connection/))) return { time, kind: 'other', name: r[1], thread, body: msg };
+  // technical join/disconnect details: same colours, but hidden in "Chat only" (the join/left lines cover it)
+  if ((r = msg.match(/^(\w{1,16})\[\/[^\]]*\] logged in with/)))
+    return { time, kind: 'other', name: r[1], thread, body: msg, cls: 'join' };
+  if ((r = msg.match(/^(\w{1,16})(?: \(\/[^)]*\))? lost connection/)))
+    return { time, kind: 'other', name: r[1], thread, body: msg, cls: 'leave' };
   if ((r = msg.match(/^(\w{1,16}) issued server command: /)) && r[1] !== 'CONSOLE')
     return { time, kind: 'pcmd', name: r[1], body: msg };
   if ((r = msg.match(DEATH)) && players.has(r[1]) && /Server thread/.test(thread))
@@ -223,8 +235,7 @@ function classify(text) {
   return { time, kind: 'other', thread, body: msg, cls };
 }
 
-function addLine(text) {
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+function renderLine(text) {
   const l = classify(text);
   if (l.name && l.name !== 'Server') learn(l.name);
   const div = document.createElement('div');
@@ -242,7 +253,12 @@ function addLine(text) {
     const icon = { join: '→ ', leave: '← ', adv: '★ ', death: '☠ ', pcmd: '/ ' }[l.kind];
     div.append(withNames(span(l.kind, icon), l.body));
   }
-  log.append(div);
+  return div;
+}
+// Live: append one line, keep at most 2000, follow the bottom only if the user is there
+function addLine(text) {
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.append(renderLine(text));
   while (log.childElementCount > 2000) log.firstChild.remove();
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
@@ -253,13 +269,53 @@ $('chat-only').onchange = e => {
   try { localStorage.setItem('chatOnly', e.target.checked ? '1' : ''); } catch {}
 };
 try { if (localStorage.getItem('chatOnly')) { $('chat-only').checked = true; log.classList.add('chat-only'); } } catch {}
+// --- log source: live (SSE) or an archived log ---
+let es = null;
+function showLive() {
+  log.replaceChildren(); $('archive-note').style.display = 'none';
+  es = new EventSource('/api/logs');
+  es.onmessage = e => addLine(e.data);
+  es.addEventListener('reset', () => {
+    addLine('──────── new log (server restarted) ────────');
+    loadArchiveList();                                  // the previous log is an archive now
+  });
+}
+async function showArchive(name) {
+  log.replaceChildren(); $('archive-note').style.display = 'inline';
+  log.append(span('t', 'loading …'));
+  try {
+    const r = await fetch('/api/logs/archive/' + encodeURIComponent(name));
+    if (!r.ok) throw new Error(r.statusText);
+    const lines = (await r.text()).split('\n');
+    if ($('logsel').value !== name) return;            // switched again meanwhile
+    // build everything off-screen first: one layout pass instead of one per line
+    const frag = document.createDocumentFragment();
+    for (const line of lines) frag.append(renderLine(line));
+    log.replaceChildren(frag);
+    log.scrollTop = log.scrollHeight;
+  } catch (e) { log.replaceChildren(span('e', 'Could not load log: ' + e.message)); }
+}
+$('logsel').onchange = e => {
+  if (es) { es.close(); es = null; }
+  e.target.value ? showArchive(e.target.value) : showLive();
+};
+async function loadArchiveList() {
+  try {
+    const files = await (await fetch('/api/logs/archive')).json();
+    const sel = $('logsel'), current = sel.value;
+    sel.replaceChildren(new Option('Live log', ''));
+    for (const f of files) {
+      const [, date, n] = f.name.match(/^(\d{4}-\d{2}-\d{2})-(\d+)/);
+      const label = new Date(date + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      sel.append(new Option(`${label}${n > 1 ? ' (' + n + ')' : ''}`, f.name));
+    }
+    sel.value = current;
+  } catch {}
+}
+
 // Learn all known player names first, so even the first lines of the backlog get coloured
 fetch('/api/players').then(r => r.json()).then(d => d.names.forEach(learn)).catch(() => {})
-  .finally(() => {
-    const es = new EventSource('/api/logs');
-    es.onmessage = e => addLine(e.data);
-    es.addEventListener('reset', () => addLine('──────── new log (server restarted) ────────'));
-  });
+  .finally(() => { showLive(); loadArchiveList(); });
 
 // --- console with history ---
 const hist = []; let hi = 0;
