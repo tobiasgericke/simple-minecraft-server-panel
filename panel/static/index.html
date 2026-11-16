@@ -35,6 +35,15 @@
          white-space: pre-wrap; overflow-wrap: anywhere; min-height: 200px; }
   #log .w { color: var(--warn); } #log .e { color: var(--bad); } #log .c { color: var(--accent); }
   #log .t { color: #56606c; }
+  #log .pn { font-weight: 700; }                       /* player name, colour set inline */
+  #log .chat { background: rgba(79,143,224,.08); border-left: 3px solid var(--accent);
+               padding: 1px 6px; margin: 1px 0; border-radius: 0 4px 4px 0; }
+  #log .chat .msg { color: #f0f3f6; }
+  #log .join { color: #7fcf7f; } #log .leave { color: #9aa4b1; }
+  #log .adv { color: #e8c45a; } #log .death { color: #e48a80; } #log .pcmd { color: var(--muted); }
+  #log.chat-only > div:not(.player) { display: none; }
+  .logbar { display: flex; align-items: center; gap: 8px; padding: 0 16px 6px; color: var(--muted); font-size: 12px; }
+  .logbar label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
   form { display: flex; gap: 8px; padding: 10px 16px 14px; }
   input { flex: 1; background: #0b0d10; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
           padding: 8px 10px; font: 13px ui-monospace, Consolas, monospace; min-width: 0; }
@@ -63,6 +72,10 @@
     <button id="b-dl" style="margin-top:6px" onclick="download()">Download now</button></div>
 </section>
 
+<div class="logbar">
+  <span>Log</span><span class="spacer"></span>
+  <label><input type="checkbox" id="chat-only"> Chat only</label>
+</div>
 <div id="log"></div>
 <form id="console">
   <input id="cmd" placeholder="Console command, e.g. list, say Hello, op Name   (↑/↓ = history)" autocomplete="off">
@@ -150,22 +163,103 @@ function download() {
 
 // --- live log ---
 const log = $('log');
+
+// Player names: every name gets a fixed colour derived from the name itself
+const players = new Set();
+let nameRe = null;
+function learn(name) {
+  if (!name || players.has(name) || !/^\w{1,16}$/.test(name)) return;
+  players.add(name);
+  const alt = [...players].sort((a, b) => b.length - a.length).join('|');   // longest first
+  nameRe = new RegExp(`(?<![\\w])(${alt})(?![\\w])`, 'g');
+}
+function nameColor(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360}, 70%, 68%)`;
+}
+// Appends text to el, wrapping known player names in coloured spans (never uses innerHTML)
+function withNames(el, text) {
+  if (!nameRe) { el.append(text); return el; }
+  let last = 0;
+  for (const m of text.matchAll(nameRe)) {
+    el.append(text.slice(last, m.index));
+    const s = document.createElement('span');
+    s.className = 'pn'; s.style.color = nameColor(m[1]); s.textContent = m[1];
+    el.append(s);
+    last = m.index + m[1].length;
+  }
+  el.append(text.slice(last));
+  return el;
+}
+function span(cls, text) {
+  const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s;
+}
+
+const DEATH = /^(\w{1,16}) (was |drowned|died|fell |burned|blew up|hit the ground|went up in flames|went off with|tried to swim|starved|suffocated|withered|froze|experienced kinetic|discovered the floor|walked into|didn't want to live)/;
+
+// Splits "[12:00:00] [Thread/LEVEL]: message" and decides how the line is shown
+function classify(text) {
+  const m = text.match(/^(\[[\d:]+\] )?(\[[^\]]*\/([A-Z]+)\]: )?(.*)$/);
+  const time = m[1] || '', thread = m[2] || '', level = m[3] || '';
+  const msg = m[4].replace(/^System chat: /, '');
+  let r;
+  if ((r = msg.match(/^(?:\[Not Secure\] )?<(\w{1,16})> (.*)$/))) return { time, kind: 'chat', name: r[1], body: r[2] };
+  if ((r = msg.match(/^(?:\[Not Secure\] )?\[Server\] (.*)$/))) return { time, kind: 'chat', name: 'Server', body: r[1] };
+  if ((r = msg.match(/^(\w{1,16}) joined the game/))) return { time, kind: 'join', name: r[1], body: msg };
+  if ((r = msg.match(/^(\w{1,16}) left the game/))) return { time, kind: 'leave', name: r[1], body: msg };
+  if ((r = msg.match(/^(\w{1,16}) has (made the advancement|completed the challenge|reached the goal)/)))
+    return { time, kind: 'adv', name: r[1], body: msg };
+  if ((r = msg.match(/^(\w{1,16})\[\/[^\]]*\] logged in with/))) return { time, kind: 'other', name: r[1], thread, body: msg };
+  if ((r = msg.match(/^(\w{1,16})(?: \(\/[^)]*\))? lost connection/))) return { time, kind: 'other', name: r[1], thread, body: msg };
+  if ((r = msg.match(/^(\w{1,16}) issued server command: /)) && r[1] !== 'CONSOLE')
+    return { time, kind: 'pcmd', name: r[1], body: msg };
+  if ((r = msg.match(DEATH)) && players.has(r[1]) && /Server thread/.test(thread))
+    return { time, kind: 'death', name: r[1], body: msg };
+  let cls = '';
+  if (/^(ERROR|FATAL)$/.test(level) || /Exception/.test(msg)) cls = 'e';
+  else if (level === 'WARN') cls = 'w';
+  else if (/issued server command|CONSOLE/.test(msg)) cls = 'c';
+  return { time, kind: 'other', thread, body: msg, cls };
+}
+
 function addLine(text) {
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const l = classify(text);
+  if (l.name && l.name !== 'Server') learn(l.name);
   const div = document.createElement('div');
-  const m = text.match(/^(\[[\d:]+\] )?(.*)$/);
-  if (m[1]) { const t = document.createElement('span'); t.className = 't'; t.textContent = m[1]; div.append(t); }
-  const rest = document.createElement('span'); rest.textContent = m[2];
-  if (/\/(ERROR|FATAL)\]|Exception/.test(text)) rest.className = 'e';
-  else if (/\/WARN\]/.test(text)) rest.className = 'w';
-  else if (/issued server command|CONSOLE/.test(text)) rest.className = 'c';
-  div.append(rest); log.append(div);
+  if (l.time) div.append(span('t', l.time));
+  if (l.kind === 'chat') {
+    div.className = 'chat player';
+    const n = span('pn', l.name);
+    n.style.color = l.name === 'Server' ? 'var(--accent)' : nameColor(l.name);
+    div.append(n, span('t', ': '), withNames(span('msg', ''), l.body));
+  } else if (l.kind === 'other') {
+    if (l.thread) div.append(span('t', l.thread));
+    div.append(withNames(span(l.cls, ''), l.body));
+  } else {
+    div.className = 'player';           // join, leave, adv, death, pcmd: shown in "Chat only" too
+    const icon = { join: '→ ', leave: '← ', adv: '★ ', death: '☠ ', pcmd: '/ ' }[l.kind];
+    div.append(withNames(span(l.kind, icon), l.body));
+  }
+  log.append(div);
   while (log.childElementCount > 2000) log.firstChild.remove();
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
-const es = new EventSource('/api/logs');
-es.onmessage = e => addLine(e.data);
-es.addEventListener('reset', () => addLine('──────── new log (server restarted) ────────'));
+
+$('chat-only').onchange = e => {
+  log.classList.toggle('chat-only', e.target.checked);
+  log.scrollTop = log.scrollHeight;
+  try { localStorage.setItem('chatOnly', e.target.checked ? '1' : ''); } catch {}
+};
+try { if (localStorage.getItem('chatOnly')) { $('chat-only').checked = true; log.classList.add('chat-only'); } } catch {}
+// Learn all known player names first, so even the first lines of the backlog get coloured
+fetch('/api/players').then(r => r.json()).then(d => d.names.forEach(learn)).catch(() => {})
+  .finally(() => {
+    const es = new EventSource('/api/logs');
+    es.onmessage = e => addLine(e.data);
+    es.addEventListener('reset', () => addLine('──────── new log (server restarted) ────────'));
+  });
 
 // --- console with history ---
 const hist = []; let hi = 0;

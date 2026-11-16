@@ -196,6 +196,17 @@ async def status():
             "backup_warn_h": BACKUP_WARN_HOURS, "backup_crit_h": BACKUP_CRIT_HOURS}
 
 
+@app.get("/api/players")
+async def players():
+    """Every player name the server has seen (usercache.json), so the log can colour them."""
+    try:
+        cache = json.loads((MC_DIR / "usercache.json").read_text())
+        names = sorted({e["name"] for e in cache if isinstance(e, dict) and "name" in e})
+    except (OSError, ValueError):
+        names = []
+    return {"names": names}
+
+
 class Command(BaseModel):
     cmd: str
 

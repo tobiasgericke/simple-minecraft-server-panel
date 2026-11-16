@@ -4,7 +4,9 @@ A minimal, self-hosted admin panel for **one** Minecraft server (Paper, Spigot, 
 Linux box: the few things hosting panels do, without the hosting panel.
 
 - **Status**: online/offline, players (with names), memory (incl. swap), CPU, uptime
-- **Live log** in the browser, warnings and errors highlighted
+- **Live log** in the browser: chat messages styled as chat, every player name in its own
+  colour, joins/leaves/deaths/advancements marked, warnings and errors highlighted, and a
+  "Chat only" switch that hides the technical lines
 - **Console**: send commands, with history (↑/↓)
 - **Start / stop / restart** (stop goes through the console, so the world is saved)
 - **Backups**: download a consistent backup from the browser, or let your PC fetch one every
